@@ -4998,7 +4998,8 @@ struct janus_plugin_result *janus_videoroom_handle_message(janus_plugin_session 
 	} else if(!strcasecmp(request_text, "join") || !strcasecmp(request_text, "joinandconfigure")
 			|| !strcasecmp(request_text, "configure") || !strcasecmp(request_text, "publish") || !strcasecmp(request_text, "unpublish")
 			|| !strcasecmp(request_text, "start") || !strcasecmp(request_text, "pause") || !strcasecmp(request_text, "switch")
-			|| !strcasecmp(request_text, "subscribe") || !strcasecmp(request_text, "unsubscribe") || !strcasecmp(request_text, "leave")) {
+			|| !strcasecmp(request_text, "subscribe") || !strcasecmp(request_text, "unsubscribe") || !strcasecmp(request_text, "leave")
+			|| !strcasecmp(request_text, "updatelayout")) {
 		/* These messages are handled asynchronously */
 
 		janus_videoroom_message *msg = g_malloc(sizeof(janus_videoroom_message));
@@ -5799,15 +5800,15 @@ static void janus_videoroom_hangup_media_internal(janus_plugin_session *handle) 
 					json_decref(event);
 					json_decref(jsep);
 					/* Also notify event handlers */
-					if(notify_events && gateway->events_is_enabled()) {
-						json_t *info = json_object();
-						json_object_set_new(info, "event", json_string("updated"));
-						json_object_set_new(info, "room", json_integer(subscriber->room_id));
-						json_t *media = janus_videoroom_subscriber_streams_summary(subscriber, FALSE, NULL);
-						json_object_set_new(info, "streams", media);
-						json_object_set_new(info, "private_id", json_integer(subscriber->pvt_id));
-						gateway->notify_event(&janus_videoroom_plugin, session->handle, info);
-					}
+					 if(notify_events && gateway->events_is_enabled()) {
+					 	json_t *info = json_object();
+					 	json_object_set_new(info, "event", json_string("updated"));
+					 	json_object_set_new(info, "room", json_integer(subscriber->room_id));
+					 	json_t *media = janus_videoroom_subscriber_streams_summary(subscriber, FALSE, NULL);
+					 	json_object_set_new(info, "streams", media);
+					 	json_object_set_new(info, "private_id", json_integer(subscriber->pvt_id));
+					 	gateway->notify_event(&janus_videoroom_plugin, session->handle, info);
+					 }
 				}
 				janus_refcount_decrease(&subscriber->ref);
 				temp = temp->next;
@@ -6828,6 +6829,47 @@ static void *janus_videoroom_handler(void *data) {
 				json_object_set_new(event, "videoroom", json_string("event"));
 				json_object_set_new(event, "room", json_integer(participant->room_id));
 				json_object_set_new(event, "unpublished", json_string("ok"));
+			} else if(!strcasecmp(request_text, "updatelayout")) {
+				json_t *jsonLayout = json_object_get(root, "layout");
+				char *layout = json_string_value(jsonLayout);
+
+				GList *subscribers = NULL;
+				GList *temp = participant->streams;
+
+				/** Fill subscribers list */
+				while(temp) {
+					janus_videoroom_publisher_stream *ps = (janus_videoroom_publisher_stream *)temp->data;
+					GSList *temp2 = ps->subscribers;
+					while(temp2) {
+						janus_videoroom_subscriber_stream *ss = (janus_videoroom_subscriber_stream *)temp2->data;
+						temp2 = temp2->next;
+						if(ss) {
+							if(ss->type != JANUS_VIDEOROOM_MEDIA_DATA && g_list_find(subscribers, ss->subscriber) == NULL) {
+								janus_refcount_increase(&ss->subscriber->ref);
+								subscribers = g_list_append(subscribers, ss->subscriber);
+							}
+						}
+					}
+
+					temp = temp->next;
+				}
+
+				if(subscribers != NULL) {
+					temp = subscribers;
+					while(temp) {
+						janus_videoroom_subscriber *subscriber = (janus_videoroom_subscriber *)temp->data;
+						json_t *event = json_object();
+						json_object_set_new(event, "videoroom", json_string("layoutchange"));
+						json_object_set_new(event, "room", json_integer(participant->room_id));
+						json_object_set_new(event, "layout", jsonLayout);
+
+						gateway->push_event(subscriber->session->handle, &janus_videoroom_plugin, NULL, event, NULL);
+
+						temp = temp->next;
+					}
+				} else {
+					JANUS_LOG(LOG_INFO, "No subscribers to notify new layout.");
+				}
 			} else if(!strcasecmp(request_text, "leave")) {
 				/* Prepare an event to confirm the request */
 				event = json_object();
